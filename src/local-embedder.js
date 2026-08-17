@@ -8,7 +8,19 @@
 // backend is actually selected, so the heavy onnxruntime dependency never loads for users
 // on Ollama or the SkillRouter service.
 
+import os from 'node:os';
+import path from 'node:path';
+
 const DEFAULT_MODEL = 'Xenova/all-MiniLM-L6-v2';
+
+// transformers.js otherwise caches the model inside its own node_modules/.cache, which is
+// per-install and, under npx, a throwaway directory — so the ~90 MB model re-downloads on
+// every run and any network hiccup fails the whole route. Pin it to a stable, shared
+// location so it downloads once and every invocation (npx, global, or local) reuses it.
+function modelCacheDir() {
+  return process.env.SKILLRAM_MODEL_CACHE
+    ?? path.join(process.env.SKILLRAM_HOME ?? path.join(os.homedir(), '.skillram'), 'models', 'transformers');
+}
 
 let pipelinePromise = null;
 
@@ -30,7 +42,8 @@ async function getExtractor(model) {
   if (!pipelinePromise) {
     pipelinePromise = (async () => {
       const { pipeline, env } = await loadTransformers();
-      // Keep everything local and quiet: no telemetry, cache under the user's HF cache.
+      // Persistent, shared cache so the model downloads exactly once across all invocations.
+      env.cacheDir = modelCacheDir();
       env.allowRemoteModels = env.allowRemoteModels ?? true;
       return pipeline('feature-extraction', model ?? DEFAULT_MODEL);
     })().catch((error) => {
