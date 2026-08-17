@@ -126,8 +126,6 @@ npx skillram eval-public /path/to/eval_core --tier hard --sample-tasks 75 --samp
 npx skillram eval-memory predictions.json relevance.json --compare
 ```
 
-These are development-scale benchmark numbers on public data, run locally and reproducibly, not a marketing chart.
-
 ---
 
 MIT licensed. Local-first. Reversible. Install every skill; load only what the task needs.
