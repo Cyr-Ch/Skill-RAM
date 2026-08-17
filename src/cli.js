@@ -1,5 +1,5 @@
-import { parseArgs } from './args.js';
 import path from 'node:path';
+import { parseArgs } from './args.js';
 import { analyze, scanSkills } from './scan.js';
 import { receiptData, receiptText } from './format.js';
 import { generateRoast } from './roast.js';
@@ -26,13 +26,13 @@ const packageVersion = createRequire(import.meta.url)('../package.json').version
 const help = `SkillRAM — vault and load skills on demand
 
 Usage:
-  skillram receipt [paths...] [--provider claude|codex|all] [--share [receipt.svg]] [--json]
-  skillram roast [paths...] [--provider claude|codex|all] [--llm anthropic|openai] [--tone brutal|professional|hacker]
-  skillram install [paths...] [--provider claude|codex|all] [--dry-run]
-  skillram vault [paths...] [--provider claude|codex|all] [--dry-run]
-  skillram integrate [--provider claude|codex|all]
+  skillram receipt [paths...] [--provider claude|codex|kiro|all] [--share [receipt.svg]] [--json]
+  skillram roast [paths...] [--provider claude|codex|kiro|all] [--llm anthropic|openai] [--tone brutal|professional|hacker]
+  skillram install [paths...] [--provider claude|codex|kiro|all] [--dry-run]
+  skillram vault [paths...] [--provider claude|codex|kiro|all] [--dry-run]
+  skillram integrate [--provider claude|codex|kiro|all]
   skillram reindex [--no-embeddings]
-  skillram route <prompt> [--provider claude|codex|all] [--top 2] [--router hybrid|lexical|semantic|skillrouter]
+  skillram route <prompt> [--provider claude|codex|kiro|all] [--top 2] [--router hybrid|lexical|semantic|skillrouter]
   skillram load <skill-id-or-name...> [--budget 8000]
   skillram measure [representative prompt]
   skillram doctor
@@ -78,7 +78,7 @@ export async function run(argv) {
   if (!commands.has(command)) throw new Error(`Unknown command: ${command}\n\n${help}`);
 
   const provider = options.provider ?? 'all';
-  if (!['claude', 'codex', 'all'].includes(provider)) throw new Error('Provider must be claude, codex, or all.');
+  if (!['claude', 'codex', 'kiro', 'all'].includes(provider)) throw new Error('Provider must be claude, codex, kiro, or all.');
   if (options.top !== undefined && (!Number.isInteger(options.top) || options.top < 1 || options.top > 20)) throw new Error('--top must be an integer from 1 to 20.');
   if (options.budget !== undefined && (!Number.isInteger(options.budget) || options.budget < 1)) throw new Error('--budget must be a positive integer.');
   if (options.runs !== undefined && (!Number.isInteger(options.runs) || options.runs < 1 || options.runs > 50)) throw new Error('--runs must be an integer from 1 to 50.');
@@ -242,16 +242,26 @@ export async function run(argv) {
 
   if (command === 'install' || command === 'vault') {
     const result = await vaultSkills({ inputRoots: options.paths, provider, stateDir, dryRun: options.dryRun });
-    console.log(`${options.dryRun ? 'Would vault' : result.applied ? 'Vaulted' : 'Found'} ${result.entries.length} eligible skills.`);
-    if (options.dryRun) for (const entry of result.entries) console.log(`  + [${entry.provider}] ${entry.name}`);
+    const moveCount = result.moves.length;
+    const indexCount = result.entries.length;
+    console.log(`${options.dryRun ? 'Would move' : result.applied ? 'Moved' : 'Found'} ${moveCount} skill director${moveCount === 1 ? 'y' : 'ies'} and index ${indexCount} routable skill${indexCount === 1 ? '' : 's'}.`);
+    if (options.dryRun) {
+      for (const move of result.moves) console.log(`  move ${move.source}`);
+      if (indexCount <= 40) for (const entry of result.entries) console.log(`  + [${entry.provider}] ${entry.name}`);
+      else console.log(`  + ${indexCount} indexed skills (use --json receipt for the full catalog)`);
+    }
     if (result.skipped.length) {
       console.log(`Skipped ${result.skipped.length} managed or unsupported skills:`);
       for (const entry of result.skipped) console.log(`  - ${entry.name}: ${entry.reason}`);
     }
+    const sharedAgentsMoves = result.moves.filter((move) => move.source.split(path.sep).includes('.agents'));
+    if (sharedAgentsMoves.length) {
+      console.log(`Note: ${sharedAgentsMoves.length} vaulted director${sharedAgentsMoves.length === 1 ? 'y lives' : 'ies live'} under a shared .agents/skills directory. Only hooked providers (Claude, Codex, Kiro) get routing; other tools reading that directory will not see these skills until “skillram uninstall”.`);
+    }
     if (result.applied && command === 'install' && options.integrations !== false) {
       try {
         const integrations = await installIntegrations(stateDir, { provider, additionalContextLimit: options.budget ?? 8000, ...options });
-        console.log(`Installed ${integrations.length} prompt-hook integrations.`);
+        for (const integration of integrations) console.log(`Hooked ${integration.provider} via ${integration.file}`);
       } catch (error) {
         await restoreVault(stateDir);
         throw error;
@@ -332,6 +342,24 @@ export async function run(argv) {
   }
 
   if (command === 'hook') {
+    if (provider === 'kiro') {
+      // Kiro delivers the prompt via the USER_PROMPT environment variable and
+      // treats a command hook's stdout as context. When the variable is set,
+      // stdin is not read at all so the hook can never hang on an unpiped stream.
+      let input = { hook_event_name: 'UserPromptSubmit', prompt: process.env.USER_PROMPT ?? '', session_id: null };
+      if (!input.prompt) {
+        let raw = '';
+        for await (const chunk of process.stdin) raw += chunk;
+        let parsed = {};
+        try { parsed = JSON.parse(raw || '{}'); } catch { parsed = {}; }
+        input.prompt = parsed.prompt ?? parsed.userPrompt ?? parsed.user_prompt ?? '';
+        input.session_id = parsed.session_id ?? parsed.sessionId ?? parsed.conversationId ?? null;
+      }
+      const result = await handleAgentHook(stateDir, input, { provider, top: options.top ?? 2, tokenBudget: options.budget ?? 8000, ...options });
+      const context = result?.output?.hookSpecificOutput?.additionalContext;
+      if (context) process.stdout.write(`${context}\n`);
+      return;
+    }
     let raw = '';
     for await (const chunk of process.stdin) raw += chunk;
     const input = JSON.parse(raw || '{}');

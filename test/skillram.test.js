@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, mkdir, writeFile, readFile, readdir, rename } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, writeFile, readFile, readdir, rename, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -8,7 +8,7 @@ import { analyze, defaultRoots, estimateTokens, scanSkills } from '../src/scan.j
 import { receiptData, receiptText } from '../src/format.js';
 import { generateRoast, roastFacts } from '../src/roast.js';
 import { writeReceiptSvg } from '../src/svg.js';
-import { restoreVault, vaultSkills, vaultMeasurements } from '../src/vault.js';
+import { restoreVault, vaultSkills, vaultMeasurements, buildVaultPlan, collapseToAncestors } from '../src/vault.js';
 import { loadIndex, loadState } from '../src/state.js';
 import { handleAgentHook, handlePromptHook, loadSelection, rebuildRetrievalIndex, routePrompt } from '../src/runtime.js';
 import { installIntegrations, removeIntegrations } from '../src/integrations.js';
@@ -191,6 +191,7 @@ test('vaults, routes, injects, measures, and restores skills', async () => {
   const original = await readFile(path.join(root, 'react-performance', 'SKILL.md'), 'utf8');
   const installed = await vaultSkills({ inputRoots: [root], provider: 'claude', stateDir });
   assert.equal(installed.applied, true);
+  assert.equal(installed.moves.length, 2);
   assert.equal(installed.entries.length, 2);
   await assert.rejects(access(path.join(root, 'react-performance', 'SKILL.md')));
 
@@ -220,6 +221,88 @@ test('vaults, routes, injects, measures, and restores skills', async () => {
   assert.equal(restored.restored, 2);
   assert.equal(await readFile(path.join(root, 'react-performance', 'SKILL.md'), 'utf8'), original);
   await assert.rejects(access(path.join(stateDir, 'retrieval-index.json')));
+});
+
+test('collapses nested bundle directories into one move while indexing contained skills', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'skillram-bundle-'));
+  const bundle = path.join(root, 'bundle');
+  const child = path.join(bundle, 'child-skill');
+  const wrapper = path.join(root, 'child-skill');
+  await mkdir(child, { recursive: true });
+  await mkdir(wrapper, { recursive: true });
+  await writeFile(path.join(bundle, 'SKILL.md'), '---\nname: bundle\ndescription: Bundle root skill\n---\nBundle body.');
+  await writeFile(path.join(child, 'SKILL.md'), '---\nname: child-skill\ndescription: Nested child skill\n---\nChild body.');
+  const mirrorSkill = path.join(root, 'mirror', '.agents', 'skills', 'child-skill');
+  await mkdir(mirrorSkill, { recursive: true });
+  await writeFile(path.join(mirrorSkill, 'SKILL.md'), '---\nname: child-skill\ndescription: Nested child skill\n---\nChild body.');
+  // A mirror copy with reformatted frontmatter: same skill, different bytes.
+  const nearMirror = path.join(root, 'near', '.cursor', 'skills', 'child-skill');
+  await mkdir(nearMirror, { recursive: true });
+  await writeFile(path.join(nearMirror, 'SKILL.md'), '---\nname: child-skill\ndescription: |\n  Nested child skill, reformatted.\n---\nChild body, reformatted.');
+  // A genuinely different skill that happens to share a name, at a clean path.
+  const rival = path.join(root, 'rival', 'child-skill');
+  await mkdir(rival, { recursive: true });
+  await writeFile(path.join(rival, 'SKILL.md'), '---\nname: child-skill\ndescription: Unrelated skill with a clashing name\n---\nCompletely different body.');
+  await symlink(path.join(child, 'SKILL.md'), path.join(wrapper, 'SKILL.md'));
+
+  const report = analyze(await scanSkills([root]));
+  const plan = buildVaultPlan(report, path.join(root, '.skillram'));
+  assert.deepEqual(collapseToAncestors([bundle, child, path.join(root, 'mirror')]), [bundle, path.join(root, 'mirror')]);
+  assert.equal(plan.moves.length, 4);
+  assert.equal(plan.entries.length, 3);
+  assert.ok(plan.entries.some((entry) => entry.name === 'child-skill' && entry.vaultSkillFile.includes(`${path.sep}child-skill${path.sep}SKILL.md`) && entry.originalSkillFile === path.join(child, 'SKILL.md')));
+  assert.ok(plan.entries.some((entry) => entry.originalSkillFile === path.join(rival, 'SKILL.md')), 'distinct same-name skill at a clean path must stay routable');
+  assert.ok(!plan.entries.some((entry) => entry.originalSkillFile === path.join(nearMirror, 'SKILL.md')), 'near-duplicate mirror copy must not be indexed');
+  assert.ok(plan.skipped.some((entry) => entry.reason.includes('symlink wrapper')));
+  assert.ok(plan.skipped.some((entry) => entry.reason.includes('canonical bundle path')));
+  assert.ok(plan.skipped.some((entry) => entry.file === path.join(nearMirror, 'SKILL.md') && entry.reason.includes('mirror copy superseded')));
+
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), 'skillram-bundle-state-'));
+  const installed = await vaultSkills({ inputRoots: [root], provider: 'claude', stateDir });
+  assert.equal(installed.applied, true);
+  assert.equal(installed.moves.length, 4);
+  assert.equal(installed.entries.length, 3);
+  // The nested child must travel inside its bundle: moving it separately is what
+  // used to fail with ENOENT once the bundle root had already been renamed.
+  const childEntry = installed.entries.find((entry) => entry.originalSkillFile === path.join(child, 'SKILL.md'));
+  assert.equal(await readFile(childEntry.vaultSkillFile, 'utf8'), '---\nname: child-skill\ndescription: Nested child skill\n---\nChild body.');
+  await assert.rejects(access(bundle));
+  const routed = await routePrompt(stateDir, 'Use the nested child skill', { provider: 'claude', top: 1, embeddings: false });
+  assert.equal(routed[0].entry.name, 'child-skill');
+
+  const restored = await restoreVault(stateDir);
+  assert.equal(restored.restored, 4);
+  assert.equal(await readFile(path.join(child, 'SKILL.md'), 'utf8'), '---\nname: child-skill\ndescription: Nested child skill\n---\nChild body.');
+  assert.equal(await readFile(path.join(nearMirror, 'SKILL.md'), 'utf8'), '---\nname: child-skill\ndescription: |\n  Nested child skill, reformatted.\n---\nChild body, reformatted.');
+});
+
+test('rolls a failed install back to every original location', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'skillram-rollback-'));
+  const first = path.join(root, 'aa');
+  const second = path.join(root, 'bbbb');
+  await mkdir(first, { recursive: true });
+  await mkdir(second, { recursive: true });
+  await writeFile(path.join(first, 'SKILL.md'), '---\nname: aa-skill\ndescription: First\n---\nFirst body.');
+  await writeFile(path.join(second, 'SKILL.md'), '---\nname: bbbb-skill\ndescription: Second\n---\nSecond body.');
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), 'skillram-rollback-state-'));
+
+  // A dangling symlink reads as absent to the pre-flight check but still makes
+  // the directory rename fail, so the second move blows up mid-install.
+  const plan = buildVaultPlan(analyze(await scanSkills([root])), stateDir);
+  assert.equal(plan.moves.length, 2);
+  await mkdir(path.dirname(plan.moves[1].target), { recursive: true });
+  await symlink(path.join(root, 'missing-target'), plan.moves[1].target);
+
+  await assert.rejects(
+    vaultSkills({ inputRoots: [root], provider: 'claude', stateDir }),
+    (error) => error.message.includes('Vault installation rolled back'),
+  );
+
+  assert.equal(await readFile(path.join(first, 'SKILL.md'), 'utf8'), '---\nname: aa-skill\ndescription: First\n---\nFirst body.');
+  assert.equal(await readFile(path.join(second, 'SKILL.md'), 'utf8'), '---\nname: bbbb-skill\ndescription: Second\n---\nSecond body.');
+  const state = await loadState(stateDir);
+  assert.equal(state.status, 'failed');
+  assert.deepEqual(state.moves, []);
 });
 
 test('installs and removes Claude and Codex hooks without replacing existing hooks', async () => {
@@ -260,6 +343,48 @@ test('installs and removes Claude and Codex hooks without replacing existing hoo
   assert.equal(cleaned.hooks.UserPromptSubmit, undefined);
   assert.equal(cleaned.hooks.PostCompact, undefined);
   assert.equal(cleaned.hooks.SessionEnd, undefined);
+  await restoreVault(stateDir);
+});
+
+test('installs a Kiro workspace hook, routes via USER_PROMPT, and removes it on uninstall', async () => {
+  const root = await fixture();
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), 'skillram-kiro-state-'));
+  const fakeHome = await mkdtemp(path.join(os.tmpdir(), 'skillram-kiro-home-'));
+  const fakeCwd = await mkdtemp(path.join(os.tmpdir(), 'skillram-kiro-project-'));
+  await mkdir(path.join(fakeHome, '.kiro'), { recursive: true });
+  await vaultSkills({ inputRoots: [root], provider: 'kiro', stateDir });
+
+  const integrations = await installIntegrations(stateDir, { provider: 'all', home: fakeHome, cwd: fakeCwd });
+  assert.deepEqual(integrations.map((integration) => integration.provider), ['claude', 'codex', 'kiro']);
+  const kiro = JSON.parse(await readFile(path.join(fakeCwd, '.kiro', 'hooks', 'skillram.json'), 'utf8'));
+  assert.equal(kiro.version, 'v1');
+  assert.equal(kiro.hooks.length, 1);
+  assert.equal(kiro.hooks[0].trigger, 'UserPromptSubmit');
+  assert.equal(kiro.hooks[0].action.type, 'command');
+  assert.match(kiro.hooks[0].action.command, /hook --provider kiro/);
+  assert.equal(kiro.hooks[0].enabled, true);
+
+  // Kiro delivers the prompt via USER_PROMPT and treats stdout as context, so
+  // the hook must emit plain skill text, not the Claude JSON envelope.
+  const bin = path.join(stateDir, 'runtime', 'bin', 'skillram.js');
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [bin, 'hook', '--provider', 'kiro'], {
+      env: { ...process.env, SKILLRAM_HOME: stateDir, USER_PROMPT: 'Optimize React rendering performance' },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
+    child.stdin.end();
+  });
+  assert.ok(output.trim().length > 0, 'kiro hook must inject matching skill text');
+  assert.ok(!output.trimStart().startsWith('{'), 'kiro hook output must be plain text, not a JSON envelope');
+  assert.match(output, /react/i);
+
+  assert.equal(await removeIntegrations(stateDir), 3);
+  await assert.rejects(access(path.join(fakeCwd, '.kiro', 'hooks', 'skillram.json')));
   await restoreVault(stateDir);
 });
 

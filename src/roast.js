@@ -10,13 +10,14 @@ function overlapTopics(skills) {
 export function roastFacts(report) {
   return {
     provider: report.provider,
-    installedSkills: report.skills.length,
+    installedSkills: report.loadedSkills.length,
+    skillFilesOnDisk: report.skills.length,
     installedPlugins: report.plugins.length,
-    estimatedActivationTokens: report.catalogTokens,
+    estimatedActivationTokens: report.loadedCatalogTokens,
     removableRepeatedBodyTokens: report.duplicateTokens,
     tokenEstimateMethod: report.tokenEstimateMethod,
     marketplaceSkillsNotActive: report.marketplaceSkills.length,
-    overlapTopics: overlapTopics(report.skills),
+    overlapTopics: overlapTopics(report.loadedSkills),
   };
 }
 
