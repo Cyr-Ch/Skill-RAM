@@ -1,3 +1,5 @@
+import { PROVIDERS } from './scan.js';
+
 const integer = new Intl.NumberFormat('en-US');
 
 export function formatTokens(value) {
@@ -13,39 +15,67 @@ function row(label, value, width = 50) {
   return `│ ${label}${' '.repeat(gap)}${shown} │`;
 }
 
-export function receiptText(report) {
-  const width = 50;
-  const providerLabel = report.provider === 'all' ? 'CLAUDE + CODEX' : report.provider.toUpperCase();
-  const title = ` YOUR ${providerLabel} SKILL RECEIPT `;
+function box(title, rows, width = 50) {
   const side = width - 2 - title.length;
   const left = Math.floor(side / 2);
   const right = side - left;
-  const lines = [
-    `╭${'─'.repeat(left)}${title}${'─'.repeat(right)}╮`,
-    ...(report.provider === 'all' ? [
-      row('Claude skills', `${integer.format(report.providerBreakdown.claude.skills)} · ${formatTokens(report.providerBreakdown.claude.catalogTokens)}`, width),
-      row('Codex skills', `${integer.format(report.providerBreakdown.codex.skills)} · ${formatTokens(report.providerBreakdown.codex.catalogTokens)}`, width),
-      row('', '', width),
-    ] : []),
-    row('Installed skills', integer.format(report.skills.length), width),
-    row('Installed plugins', integer.format(report.plugins.length), width),
-    row('Estimated activation catalog', formatTokens(report.catalogTokens), width),
-    row('Removable repeated body text', formatTokens(report.duplicateTokens), width),
-    row('Largest activation entry', report.largest?.name ?? 'none', width),
+  return [`╭${'─'.repeat(left)}${title}${'─'.repeat(right)}╮`, ...rows, `╰${'─'.repeat(width - 2)}╯`];
+}
+
+export function receiptText(report) {
+  const width = 50;
+  if (report.provider !== 'all') {
+    return box(` YOUR ${report.provider.toUpperCase()} SKILL RECEIPT `, [
+      row('Skills loaded in context', integer.format(report.loadedSkills.length), width),
+      ...(report.skills.length > report.loadedSkills.length
+        ? [row('Skill files on disk (incl. mirrors)', integer.format(report.skills.length), width)]
+        : []),
+      row('Installed plugins', integer.format(report.plugins.length), width),
+      row('Estimated activation catalog', formatTokens(report.loadedCatalogTokens), width),
+      row('Removable repeated body text', formatTokens(report.duplicateTokens), width),
+      row('Largest activation entry', report.largest?.name ?? 'none', width),
+      row('Estimate method', report.tokenEstimateMethod, width),
+      ...(report.marketplaceSkills.length ? [row('', '', width), row('Marketplace skills (not active)', integer.format(report.marketplaceSkills.length), width)] : []),
+    ], width).join('\n');
+  }
+
+  // Each harness has its own context window, so each gets its own receipt —
+  // no single agent ever pays a summed activation catalog.
+  const present = PROVIDERS.filter((provider) => report.providerBreakdown[provider]?.skills > 0);
+  const boxes = present.map((provider) => {
+    const breakdown = report.providerBreakdown[provider];
+    return box(` ${provider.toUpperCase()} `, [
+      row('Skills loaded in context', integer.format(breakdown.skills), width),
+      ...(breakdown.skillFiles > breakdown.skills
+        ? [row('Skill files on disk (incl. mirrors)', integer.format(breakdown.skillFiles), width)]
+        : []),
+      ...(breakdown.plugins ? [row('Installed plugins', integer.format(breakdown.plugins), width)] : []),
+      row('Estimated activation catalog', formatTokens(breakdown.catalogTokens), width),
+      row('Removable repeated body text', formatTokens(breakdown.duplicateTokens), width),
+      row('Largest activation entry', breakdown.largest ?? 'none', width),
+      ...(provider === 'claude' && report.marketplaceSkills.length
+        ? [row('Marketplace skills (not active)', integer.format(report.marketplaceSkills.length), width)]
+        : []),
+    ], width);
+  });
+  const summary = box(' ALL HARNESSES ', [
+    row('Harnesses with skills', integer.format(present.length), width),
+    row('Skills across all harnesses', integer.format(report.loadedSkills.length), width),
     row('Estimate method', report.tokenEstimateMethod, width),
-    ...(report.marketplaceSkills.length ? [row('', '', width), row('Marketplace skills (not active)', integer.format(report.marketplaceSkills.length), width)] : []),
-    `╰${'─'.repeat(width - 2)}╯`,
-  ];
-  return lines.join('\n');
+  ], width);
+  if (!boxes.length) return summary.join('\n');
+  return [...boxes, summary].map((entry) => entry.join('\n')).join('\n');
 }
 
 export function receiptData(report) {
   return {
-    installedSkills: report.skills.length,
+    installedSkills: report.loadedSkills.length,
+    skillFilesOnDisk: report.skills.length,
     installedPlugins: report.plugins.length,
     provider: report.provider,
     providerBreakdown: report.providerBreakdown,
-    catalogTokens: report.catalogTokens,
+    catalogTokens: report.loadedCatalogTokens,
+    rawCatalogTokens: report.catalogTokens,
     duplicateTokens: report.duplicateTokens,
     largestOffender: report.largest?.name ?? null,
     tokenEstimateMethod: report.tokenEstimateMethod,

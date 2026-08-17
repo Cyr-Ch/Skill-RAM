@@ -1,6 +1,6 @@
 {
   "name": "skillram",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Vault and route coding-agent skills so only task-relevant instructions enter context.",
   "type": "module",
   "bin": {

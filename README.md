@@ -59,7 +59,7 @@ flowchart LR
     RT --> RK["⚖️ Rerank<br/>cross-encoder picks<br/>the best few"]
     RK --> RAM["🧠 RAM working set<br/>ARC eviction, summary tier,<br/>refresh, prefetch"]
     RAM --> INJ["✅ Inject only<br/>what's needed<br/>~3.8k tokens, not 156k"]
-    INJ --> AG["🤖 Claude Code / Codex"]
+    INJ --> AG["🤖 Claude Code / Codex / Kiro"]
 ```
 
 Install once, and every skill body moves into a private vault, out of the model's context. On each prompt, a local router scores the vaulted skills, a reranker reads the top candidates in full and picks the best, and only those instructions are injected. The session layer remembers what stayed resident, so across a long conversation the right skills persist and the rest never return.
@@ -73,7 +73,8 @@ Install once, and every skill body moves into a private vault, out of the model'
 - **Zero setup for semantic routing.** The default embedding model runs *in-process*, with no Ollama, no Python, and no GPU. It just works after install.
 - **Nothing leaves your machine.** Local models, local routing, local everything. No keys, no cloud, no telemetry.
 - **Fully reversible.** One `uninstall` puts every skill back byte for byte.
-- **Claude Code and Codex today.** One hook, both agents.
+- **Claude Code, Codex, and Kiro today.** One hook per agent, push-style routing for all three. Kiro gets a workspace hook at `<project>/.kiro/hooks/skillram.json` that reads the prompt from `USER_PROMPT` and injects matching skills as context.
+- **Honest counting.** Receipts are per harness — each agent has its own context window, so each gets its own box, deduplicated to what that agent actually loads (nested bundles, per-tool mirror copies, and symlink wrappers are indexed once from their canonical path).
 
 ---
 
@@ -105,9 +106,12 @@ Skill-RAM's session layer is a cache, so it borrows what a cache needs:
 ## Quick start
 
 ```sh
-# Preview every move, then vault skills and install the Claude + Codex hooks.
+# Preview every move, then vault skills and install the Claude + Codex (+ Kiro, when present) hooks.
 npx skillram install --dry-run
 npx skillram install
+
+# See what each harness actually loads, one receipt per agent.
+npx skillram receipt --provider all
 
 # Inspect routing without loading instructions.
 npx skillram route "review this React component"
