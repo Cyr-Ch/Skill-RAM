@@ -1,4 +1,4 @@
-![Skill-RAM: install every skill, load only what the task needs](assets/banner.svg)
+![Skill-RAM: install every skill, load only what the task needs](https://raw.githubusercontent.com/Cyr-Ch/Skill-RAM/main/assets/banner.png)
 
 # Skill-RAM
 
