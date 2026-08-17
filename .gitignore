@@ -1,0 +1,20 @@
+# Dependencies (installed, never committed)
+node_modules/
+
+# Downloaded benchmark corpora (large; fetched on demand)
+SkillRouter/
+datasets/
+
+# Generated evaluation fixture (regenerate with scripts/build-session-suite.mjs)
+benchmarks/session.skillret.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# npm pack / publish artifacts
+*.tgz
+
+# Local model + evaluation working dirs, if any are created in-tree
+.skillram/
+*.log

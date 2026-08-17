@@ -1,0 +1,8 @@
+{"id":"marker-direct-01","prompt":"Test the SkillRAM marker hook","expected":["skillram-marker"],"tags":["positive","direct"]}
+{"id":"marker-paraphrase-01","prompt":"Verify that SkillRAM prompt injection is functioning","expected":["skillram-marker"],"tags":["positive","paraphrase"]}
+{"id":"marker-terse-01","prompt":"Run the marker test","expected":["skillram-marker"],"tags":["positive","terse"]}
+{"id":"marker-noisy-01","prompt":"Before continuing, can you confirm whether the SkillRAM test marker gets injected correctly?","expected":["skillram-marker"],"tags":["positive","noisy"]}
+{"id":"negative-hook-01","prompt":"Explain how Codex lifecycle hooks work","expected":[],"forbidden":["skillram-marker"],"tags":["negative","near-miss"]}
+{"id":"negative-test-01","prompt":"Run the repository unit tests","expected":[],"forbidden":["skillram-marker"],"tags":["negative","near-miss"]}
+{"id":"negative-general-01","prompt":"Review this JavaScript function","expected":[],"forbidden":["skillram-marker"],"tags":["negative","unrelated"]}
+{"id":"negative-travel-01","prompt":"Help me plan a trip to Berlin","expected":[],"forbidden":["skillram-marker"],"tags":["negative","unrelated"]}

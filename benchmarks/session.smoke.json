@@ -1,0 +1,79 @@
+{
+  "name": "skillram-session-smoke",
+  "note": "A small self-contained session suite for the memory hierarchy. Skills are synthetic and defined inline so the suite runs with no vaulted skills and no models. It is a development smoke test for resident-set behaviour, NOT a production accuracy claim: 4 sessions is far too few to rank eviction policies. See the dataset guidance in the project README before publishing anything from it.",
+  "skills": [
+    {
+      "name": "pdf-extraction",
+      "description": "Extract text, tables, and metadata from PDF documents",
+      "body": "# pdf-extraction\nUse pdfplumber for text and camelot for tables.\n\n## Extracting text\nOpen the document and iterate pages.\n\n## Extracting tables\nPrefer lattice mode when the PDF has ruled lines.\n\n## Metadata\nRead the document info dictionary."
+    },
+    {
+      "name": "table-parsing",
+      "description": "Parse and normalize tabular data into dataframes",
+      "body": "# table-parsing\nNormalize headers before joining tables.\n\n## Header detection\nTreat the first non-empty row as the header only when types agree.\n\n## Type coercion\nCoerce numeric columns after stripping currency symbols."
+    },
+    {
+      "name": "chart-rendering",
+      "description": "Render charts and plots from tabular data",
+      "body": "# chart-rendering\nChoose the mark from the question, not the data shape.\n\n## Axis defaults\nAlways label axes with units."
+    },
+    {
+      "name": "sql-migrations",
+      "description": "Write and review reversible SQL schema migrations",
+      "body": "# sql-migrations\nEvery migration needs a tested rollback.\n\n## Backfills\nBackfill in batches outside the transaction."
+    },
+    {
+      "name": "react-review",
+      "description": "Review React components for correctness and performance",
+      "body": "# react-review\nMeasure before recommending an optimization.\n\n## Re-render checks\nLook for unstable props before reaching for memo."
+    },
+    {
+      "name": "travel-planning",
+      "description": "Plan trips, itineraries, and travel logistics",
+      "body": "# travel-planning\nConfirm visa requirements before booking.\n\n## Itineraries\nLeave buffer between connections."
+    }
+  ],
+  "sessions": [
+    {
+      "id": "document-pipeline",
+      "note": "A focused task that returns to the same skill repeatedly. Deduplication should make later turns free, and the co-occurring skill should surface.",
+      "turns": [
+        { "prompt": "Extract the text from this PDF report", "expectResident": ["pdf-extraction"], "forbidden": ["travel-planning"] },
+        { "prompt": "Now pull the tables out of that PDF", "expectResident": ["pdf-extraction", "table-parsing"], "forbidden": ["travel-planning"] },
+        { "prompt": "Extract the text from this PDF report", "expectResident": ["pdf-extraction"], "forbidden": ["travel-planning"] },
+        { "prompt": "Normalize the parsed table headers", "expectResident": ["table-parsing"], "forbidden": ["travel-planning"] },
+        { "prompt": "Plot the normalized table as a bar chart", "expectResident": ["chart-rendering"], "forbidden": ["travel-planning"] }
+      ]
+    },
+    {
+      "id": "compaction-pressure",
+      "note": "Accumulates several skills, then compacts under a budget that cannot hold them all. The two skills used most recently must survive.",
+      "compactAfter": [3],
+      "compactBudget": 260,
+      "compactExpect": ["react-review", "sql-migrations"],
+      "turns": [
+        { "prompt": "Extract the text from this PDF report", "expectResident": ["pdf-extraction"] },
+        { "prompt": "Plot that data as a chart", "expectResident": ["chart-rendering"] },
+        { "prompt": "Write a reversible SQL migration for the results table", "expectResident": ["sql-migrations"] },
+        { "prompt": "Review this React component for unnecessary re-renders", "expectResident": ["react-review"] },
+        { "prompt": "Review this React component for unnecessary re-renders", "expectResident": ["react-review"] }
+      ]
+    },
+    {
+      "id": "near-miss-recovery",
+      "note": "The prompt is ambiguous between two neighbours. Whichever is not loaded should still be discoverable through the summary tier rather than invisible.",
+      "turns": [
+        { "prompt": "Help me work with tables from a PDF", "expectResident": ["pdf-extraction"], "expectSummary": ["table-parsing"] },
+        { "prompt": "Actually I need the table normalization step", "expectResident": ["table-parsing"] }
+      ]
+    },
+    {
+      "id": "unrelated-prompts",
+      "note": "Negative control. None of these should activate a technical skill.",
+      "turns": [
+        { "prompt": "What is the capital of Portugal?", "expectResident": [], "forbidden": ["pdf-extraction", "sql-migrations", "react-review", "chart-rendering", "table-parsing"] },
+        { "prompt": "Remind me to call my sister tomorrow", "expectResident": [], "forbidden": ["pdf-extraction", "sql-migrations", "react-review", "chart-rendering", "table-parsing"] }
+      ]
+    }
+  ]
+}
